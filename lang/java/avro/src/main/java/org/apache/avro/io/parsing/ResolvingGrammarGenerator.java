@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -47,7 +47,7 @@ public class ResolvingGrammarGenerator extends ValidatingGrammarGenerator {
    */
   public final Symbol generate(Schema writer, Schema reader)
     throws IOException {
-    return Symbol.root(generate(writer, reader, new HashMap<LitS, Symbol>()));
+    return Symbol.root(generate(writer, reader, new HashMap<>()));
   }
 
   /**
@@ -55,7 +55,7 @@ public class ResolvingGrammarGenerator extends ValidatingGrammarGenerator {
    * <tt>reader</tt> and returns the start symbol for the grammar generated.
    * If there is already a symbol in the map <tt>seen</tt> for resolving the
    * two schemas, then that symbol is returned. Otherwise a new symbol is
-   * generated and returnd.
+   * generated and returned.
    * @param writer    The schema used by the writer
    * @param reader    The schema used by the reader
    * @param seen      The &lt;reader-schema, writer-schema&gt; to symbol
@@ -119,7 +119,7 @@ public class ResolvingGrammarGenerator extends ValidatingGrammarGenerator {
       case UNION:
         return resolveUnion(writer, reader, seen);
       default:
-        throw new AvroTypeException("Unkown type for schema: " + writerType);
+        throw new AvroTypeException("Unknown type for schema: " + writerType);
       }
     } else {  // writer and reader are of different types
       if (writerType == Schema.Type.UNION) {
@@ -166,7 +166,7 @@ public class ResolvingGrammarGenerator extends ValidatingGrammarGenerator {
         break;
 
       case UNION:
-        int j = bestBranch(reader, writer, seen);
+        int j = firstMatchingBranch(reader, writer, seen);
         if (j >= 0) {
           Symbol s = generate(writer, reader.getTypes().get(j), seen);
           return Symbol.seq(Symbol.unionAdjustAction(j, s), Symbol.UNION);
@@ -451,7 +451,7 @@ public class ResolvingGrammarGenerator extends ValidatingGrammarGenerator {
     return false;
   }
 
-  private int bestBranch(Schema r, Schema w, Map<LitS, Symbol> seen) throws IOException {
+  private int firstMatchingBranch(Schema r, Schema w, Map<LitS, Symbol> seen) throws IOException {
     Schema.Type vt = w.getType();
       // first scan for exact match
       int j = 0;
@@ -491,11 +491,19 @@ public class ResolvingGrammarGenerator extends ValidatingGrammarGenerator {
         switch (vt) {
         case INT:
           switch (b.getType()) {
-          case LONG: case DOUBLE:
-            return j;
+            case LONG:
+            case DOUBLE:
+            case FLOAT:
+              return j;
           }
           break;
         case LONG:
+          switch (b.getType()) {
+            case DOUBLE:
+            case FLOAT:
+              return j;
+          }
+          break;
         case FLOAT:
           switch (b.getType()) {
           case DOUBLE:
