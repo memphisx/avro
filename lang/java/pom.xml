@@ -38,15 +38,9 @@
 
     <!-- version properties for dependencies -->
 
-    <!--
-      To build the avro-mapred module against Hadoop 1 specify
-      -Dhadoop.version=1 or leave unspecified to build against Hadoop 2
-    -->
-    <hadoop1.version>1.2.1</hadoop1.version>
     <hadoop2.version>2.7.3</hadoop2.version>
     <jackson.version>1.9.13</jackson.version>
-    <jetty.version>6.1.26</jetty.version>
-    <jetty-servlet-api.version>2.5-20081211</jetty-servlet-api.version>
+    <jetty.version>9.4.6.v20170531</jetty.version>
     <jopt-simple.version>5.0.3</jopt-simple.version>
     <junit.version>4.12</junit.version>
     <netty.version>3.10.6.Final</netty.version>
@@ -165,8 +159,8 @@
           <artifactId>maven-compiler-plugin</artifactId>
           <version>${compiler-plugin.version}</version>
           <configuration>
-            <source>1.6</source>
-            <target>1.6</target>
+            <source>1.8</source>
+            <target>1.8</target>
           </configuration>
         </plugin>
         <plugin>
@@ -224,8 +218,7 @@
                  rather than the console. -->
             <redirectTestOutputToFile>true</redirectTestOutputToFile>
             <failIfNoTests>false</failIfNoTests>
-            <!-- The correct argLine value depends on the JDK version -->
-            <argLine>${surefire.argline}</argLine>
+            <argLine>-Xmx1000m</argLine>
             <systemPropertyVariables>
               <test.dir>${project.basedir}/target/</test.dir>
             </systemPropertyVariables>
@@ -393,28 +386,6 @@
         </plugins>
       </build>
     </profile>
-
-    <!--In JDK 1.8 and newer the PermGem has been removed. -->
-    <!--These two profiles are to handle the differences between the before and after 1.8 -->
-    <profile>
-      <id>old-jdk</id>
-      <activation>
-        <jdk>(,1.8)</jdk>
-      </activation>
-      <properties>
-        <surefire.argline>-Xmx1000m -XX:MaxPermSize=200m</surefire.argline>
-      </properties>
-    </profile>
-    <profile>
-      <id>new-jdk</id>
-      <activation>
-        <jdk>[1.8,)</jdk>
-      </activation>
-      <properties>
-        <surefire.argline>-Xmx1000m</surefire.argline>
-      </properties>
-    </profile>
-
   </profiles>
 
   <!-- dependencyManagement can be used to define dependency versions, scopes, and
@@ -444,9 +415,14 @@
         <version>${velocity.version}</version>
       </dependency>
       <dependency>
-        <groupId>org.mortbay.jetty</groupId>
-        <artifactId>jetty</artifactId>
+        <groupId>org.eclipse.jetty</groupId>
+        <artifactId>jetty-server</artifactId>
         <version>${jetty.version}</version>
+      </dependency>
+      <dependency>
+          <groupId>org.eclipse.jetty</groupId>
+          <artifactId>jetty-servlet</artifactId>
+          <version>${jetty.version}</version>
       </dependency>
       <dependency>
         <groupId>io.netty</groupId>
@@ -457,11 +433,6 @@
         <groupId>net.sf.jopt-simple</groupId>
         <artifactId>jopt-simple</artifactId>
         <version>${jopt-simple.version}</version>
-      </dependency>
-      <dependency>
-        <groupId>org.apache.hadoop</groupId>
-        <artifactId>hadoop-core</artifactId>
-        <version>${hadoop1.version}</version>
       </dependency>
       <dependency>
         <groupId>org.apache.hadoop</groupId>
