@@ -1,5 +1,42 @@
 Avro Change Log
 
+Trunk (not yet released)
+
+  NEW FEATURES
+
+  OPTIMIZATIONS
+
+  IMPROVEMENTS
+
+    AVRO-2021: uuid logical type is not documented (Nandor Kollar via gabor)
+
+    AVRO-1047: Remaining warnings in generated Java code exposed by -Xlint:all fixed.
+    (Michael Werle via Niels Basjes)
+
+    AVRO-2080: Fix Javadoc Warnings in Generated Records
+    (Bridger Howell via Niels Basjes)
+
+    AVRO-2114: Make missing value exceptions in nested structures easier to read.
+    (Niels Basjes)
+
+    AVRO-2119: Run Apache Rat check on every java build (Niels Basjes)
+
+    AVRO-2109: Reset buffers in case of IOException (gabor)
+
+  BUG FIXES
+
+    AVRO-1401: @Nullable does not work with byte[] (Nandor Kollar via gabor)
+
+    AVRO-1485: Specification says Record field type can be record name but implementation allows any named type.
+    (Nandor Kollar via gabor)
+
+    AVRO-1966: Java: Fix NPE When copying builder with nullable record. (Niels Basjes)
+
+    AVRO-1967: Java: Fix NPE when calling getXyzBuilder on instance where the xyz is null
+    (Niels Basjes)
+
+    AVRO-2120: Fix NullPointerException thrown by Schema.Parser#parse("")
+
 Avro 1.8.2 (10 April 2017)
 
   INCOMPATIBLE CHANGES
