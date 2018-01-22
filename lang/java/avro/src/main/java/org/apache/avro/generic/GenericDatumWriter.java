@@ -68,16 +68,19 @@ public class GenericDatumWriter<D> implements DatumWriter<D> {
     try {
       LogicalType lType = schema.getLogicalType();
       if (lType != null) {
-          if (DecimalEncoder.OPTIMIZED_JSON_DECIMAL_WRITE
-                  && out instanceof DecimalEncoder) {
-            Class<? extends Object> aClass = datum.getClass();
-            if (aClass == java.math.BigDecimal.class && Decimal.is(schema)) {
-              ((DecimalEncoder) out).writeDecimal((BigDecimal) datum, schema);
-              return;
-            } else if (aClass == java.math.BigInteger.class && BigInteger.is(schema)) {
-              ((DecimalEncoder) out).writeBigInteger((java.math.BigInteger) datum, schema);
-              return;
-            }
+          if (DecimalEncoder.OPTIMIZED_JSON_DECIMAL_WRITE && out instanceof DecimalEncoder) {
+              System.out.println("Logical Type is:"+lType.getLogicalTypeName());
+              Class<? extends Object> aClass = datum.getClass();
+
+              if (aClass == java.math.BigDecimal.class && Decimal.is(schema)) {
+                  ((DecimalEncoder) out).writeDecimal((BigDecimal) datum, schema);
+                  return;
+              } else if (aClass == java.math.BigInteger.class && BigInteger.is(schema)) {
+                  ((DecimalEncoder) out).writeBigInteger((java.math.BigInteger) datum, schema);
+                  return;
+              } else if (aClass == String.class)
+                  System.out.println("Hmmm this is a String and nothing is done");
+              }
           }
           datum = lType.serialize(datum);
       }
