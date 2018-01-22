@@ -71,7 +71,6 @@ public class GenericDatumWriter<D> implements DatumWriter<D> {
           if (DecimalEncoder.OPTIMIZED_JSON_DECIMAL_WRITE && out instanceof DecimalEncoder) {
               System.out.println("Logical Type is:"+lType.getLogicalTypeName());
               Class<? extends Object> aClass = datum.getClass();
-
               if (aClass == java.math.BigDecimal.class && Decimal.is(schema)) {
                   ((DecimalEncoder) out).writeDecimal((BigDecimal) datum, schema);
                   return;
@@ -80,8 +79,7 @@ public class GenericDatumWriter<D> implements DatumWriter<D> {
                   return;
               } else if (aClass == String.class)
                   System.out.println("Hmmm this is a String and nothing is done");
-              }
-          }
+      }
           datum = lType.serialize(datum);
       }
       switch (schema.getType()) {
