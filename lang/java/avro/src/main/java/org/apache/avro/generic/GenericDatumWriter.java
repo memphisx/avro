@@ -67,8 +67,8 @@ public class GenericDatumWriter<D> implements DatumWriter<D> {
     throws IOException {
     try {
       LogicalType lType = schema.getLogicalType();
-      System.out.println("Logical Type is:"+lType.getLogicalTypeName());
       if (lType != null) {
+          System.out.println("Logical Type is:"+lType.getLogicalTypeName());
           if (DecimalEncoder.OPTIMIZED_JSON_DECIMAL_WRITE && out instanceof DecimalEncoder) {
               System.out.println("And we are enabled");
               Class<? extends Object> aClass = datum.getClass();
@@ -80,9 +80,10 @@ public class GenericDatumWriter<D> implements DatumWriter<D> {
                   return;
               } else if (aClass == String.class)
                   System.out.println("Hmmm this is a String and nothing is done");
-      }
+          }
           datum = lType.serialize(datum);
-      }
+      } else
+          System.out.println("Logical type is null");
       switch (schema.getType()) {
       case RECORD: writeRecord(schema, datum, out); break;
       case ENUM:   writeEnum(schema, datum, out);   break;
