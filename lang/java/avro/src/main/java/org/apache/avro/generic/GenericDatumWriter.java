@@ -67,9 +67,10 @@ public class GenericDatumWriter<D> implements DatumWriter<D> {
     throws IOException {
     try {
       LogicalType lType = schema.getLogicalType();
+      System.out.println("Logical Type is:"+lType.getLogicalTypeName());
       if (lType != null) {
           if (DecimalEncoder.OPTIMIZED_JSON_DECIMAL_WRITE && out instanceof DecimalEncoder) {
-              System.out.println("Logical Type is:"+lType.getLogicalTypeName());
+              System.out.println("And we are enabled");
               Class<? extends Object> aClass = datum.getClass();
               if (aClass == java.math.BigDecimal.class && Decimal.is(schema)) {
                   ((DecimalEncoder) out).writeDecimal((BigDecimal) datum, schema);
