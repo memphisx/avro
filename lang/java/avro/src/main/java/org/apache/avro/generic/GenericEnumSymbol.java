@@ -1,4 +1,4 @@
-/*
+/**
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -17,9 +17,17 @@
  */
 package org.apache.avro.generic;
 
+
 /** An enum symbol. */
-public interface GenericEnumSymbol
-        extends GenericContainer, Comparable<GenericEnumSymbol> {
+public interface GenericEnumSymbol<T extends GenericEnumSymbol>
+    extends GenericContainer, Comparable<T> {
+
+// reverted since will have to keep jdk 1.7 compat for a while.
+//  default Set<String> getAliasses() {
+//      Schema.EnumSchema schema = (Schema.EnumSchema) getSchema();
+//      return schema.getSymbolAliases().get(toString());
+//  }
+
   /** Return the symbol. */
   String toString();
 }
