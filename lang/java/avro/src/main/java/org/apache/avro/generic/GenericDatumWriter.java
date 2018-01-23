@@ -96,7 +96,10 @@ public class GenericDatumWriter<D> implements DatumWriter<D> {
         break;
       case FIXED:   writeFixed(schema, datum, out);   break;
       case STRING:  writeString(schema, datum, out);  break;
-      case BYTES:   writeBytes(datum, out);           break;
+      case BYTES:
+        System.out.println("We have a byte array");
+        ((DecimalEncoder) out).writeBigInteger((java.math.BigInteger) datum, schema);
+        break;
       case INT:     out.writeInt(((Number)datum).intValue()); break;
       case LONG:    out.writeLong((Long)datum);       break;
       case FLOAT:   out.writeFloat((Float)datum);     break;
