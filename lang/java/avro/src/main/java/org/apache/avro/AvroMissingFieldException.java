@@ -15,11 +15,32 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.avro.generic;
 
-/** An enum symbol. */
-public interface GenericEnumSymbol
-        extends GenericContainer, Comparable<GenericEnumSymbol> {
-  /** Return the symbol. */
-  String toString();
+package org.apache.avro;
+
+import org.apache.avro.Schema.Field;
+
+import java.util.ArrayList;
+import java.util.List;
+
+/** Avro exception in case of missing fields. */
+public class AvroMissingFieldException extends AvroRuntimeException {
+    private List<Field> chainOfFields = new ArrayList<>(8);
+    public AvroMissingFieldException(String message, Field field) {
+        super(message);
+        chainOfFields.add(field);
+    }
+
+    public void addParentField(Field field) {
+        chainOfFields.add(field);
+    }
+
+    @Override
+    public String toString() {
+        String result = "";
+        for (Field field: chainOfFields) {
+            result = " --> " + field.name() + result;
+        }
+        return "Path in schema:" + result;
+    }
 }

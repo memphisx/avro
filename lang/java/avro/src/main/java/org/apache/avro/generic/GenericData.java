@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,31 +18,43 @@
 package org.apache.avro.generic;
 
 import java.nio.ByteBuffer;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.AbstractList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 
+import org.apache.avro.AvroMissingFieldException;
 import org.apache.avro.AvroRuntimeException;
 import org.apache.avro.AvroTypeException;
+import org.apache.avro.Conversion;
+import org.apache.avro.Conversions;
 import org.apache.avro.JsonProperties;
 import org.apache.avro.LogicalType;
 import org.apache.avro.Schema;
-import org.apache.avro.Schema.EnumSchema;
 import org.apache.avro.Schema.Field;
 import org.apache.avro.Schema.Type;
 import org.apache.avro.UnresolvedUnionException;
 import org.apache.avro.io.BinaryData;
+import org.apache.avro.io.BinaryDecoder;
+import org.apache.avro.io.BinaryEncoder;
+import org.apache.avro.io.DecoderFactory;
+import org.apache.avro.io.EncoderFactory;
 import org.apache.avro.io.DatumReader;
 import org.apache.avro.io.DatumWriter;
+import org.apache.avro.io.parsing.ResolvingGrammarGenerator;
 import org.apache.avro.util.Utf8;
 
+import org.codehaus.jackson.JsonNode;
+
+import com.google.common.collect.MapMaker;
 
 /** Utilities for generic Java data. See {@link GenericRecordBuilder} for a convenient
  * way to build {@link GenericRecord} instances.
@@ -55,7 +67,7 @@ public class GenericData {
   /** Used to specify the Java type for a string schema. */
   public enum StringType { CharSequence, String, Utf8 };
 
-  protected static final String STRING_PROP = "avro.java.string";
+  public static final String STRING_PROP = "avro.java.string";
   protected static final String STRING_TYPE_STRING = "String";
 
   private final ClassLoader classLoader;
@@ -80,12 +92,83 @@ public class GenericData {
   /** For subclasses.  GenericData does not use a ClassLoader. */
   public GenericData(ClassLoader classLoader) {
     this.classLoader = (classLoader != null)
-      ? classLoader
-      : getClass().getClassLoader();
+            ? classLoader
+            : getClass().getClassLoader();
   }
 
   /** Return the class loader that's used (by subclasses). */
   public ClassLoader getClassLoader() { return classLoader; }
+
+  private Map<String, Conversion<?>> conversions =
+          new HashMap<>();
+
+  private Map<Class<?>, Map<String, Conversion<?>>> conversionsByClass =
+          new IdentityHashMap<>();
+
+  /**
+   * Registers the given conversion to be used when reading and writing with
+   * this data model.
+   *
+   * @param conversion a logical type Conversion.
+   */
+  public void addLogicalTypeConversion(Conversion<?> conversion) {
+    conversions.put(conversion.getLogicalTypeName(), conversion);
+    Class<?> type = conversion.getConvertedType();
+    if (conversionsByClass.containsKey(type)) {
+      conversionsByClass.get(type).put(
+              conversion.getLogicalTypeName(), conversion);
+    } else {
+      Map<String, Conversion<?>> conversions = new LinkedHashMap<>();
+      conversions.put(conversion.getLogicalTypeName(), conversion);
+      conversionsByClass.put(type, conversions);
+    }
+  }
+
+  /**
+   * Returns the first conversion found for the given class.
+   *
+   * @param datumClass a Class
+   * @return the first registered conversion for the class, or null
+   */
+  @SuppressWarnings("unchecked")
+  public <T> Conversion<T> getConversionByClass(Class<T> datumClass) {
+    Map<String, Conversion<?>> conversions = conversionsByClass.get(datumClass);
+    if (conversions != null) {
+      return (Conversion<T>) conversions.values().iterator().next();
+    }
+    return null;
+  }
+
+  /**
+   * Returns the conversion for the given class and logical type.
+   *
+   * @param datumClass a Class
+   * @param logicalType a LogicalType
+   * @return the conversion for the class and logical type, or null
+   */
+  @SuppressWarnings("unchecked")
+  public <T> Conversion<T> getConversionByClass(Class<T> datumClass,
+                                                LogicalType logicalType) {
+    Map<String, Conversion<?>> conversions = conversionsByClass.get(datumClass);
+    if (conversions != null) {
+      return (Conversion<T>) conversions.get(logicalType.getName());
+    }
+    return null;
+  }
+
+  /**
+   * Returns the Conversion for the given logical type.
+   *
+   * @param logicalType a logical type
+   * @return the conversion for the logical type, or null
+   */
+  @SuppressWarnings("unchecked")
+  public Conversion<Object> getConversionFor(LogicalType logicalType) {
+    if (logicalType == null) {
+      return null;
+    }
+    return (Conversion<Object>) conversions.get(logicalType.getName());
+  }
 
   /** Default implementation of {@link GenericRecord}. Note that this implementation
    * does not fill in default values for fields if they are not specified; use {@link
@@ -107,7 +190,7 @@ public class GenericData {
       if (deepCopy) {
         for (int ii = 0; ii < values.length; ii++) {
           values[ii] = INSTANCE.deepCopy(
-              schema.getFields().get(ii).schema(), other.values[ii]);
+                  schema.getFields().get(ii).schema(), other.values[ii]);
         }
       }
       else {
@@ -151,7 +234,7 @@ public class GenericData {
   /** Default implementation of an array. */
   @SuppressWarnings(value="unchecked")
   public static class Array<T> extends AbstractList<T>
-    implements GenericArray<T>, Comparable<GenericArray<T>> {
+          implements GenericArray<T>, Comparable<GenericArray<T>> {
     private static final Object[] EMPTY = new Object[0];
     private final Schema schema;
     private int size;
@@ -175,7 +258,11 @@ public class GenericData {
     @Override
     public Schema getSchema() { return schema; }
     @Override public int size() { return size; }
-    @Override public void clear() { size = 0; }
+    @Override public void clear() {
+      // Let GC do its work
+      Arrays.fill(elements, 0, size, null);
+      size = 0;
+    }
     @Override public Iterator<T> iterator() {
       return new Iterator<T>() {
         private int position = 0;
@@ -191,15 +278,6 @@ public class GenericData {
       if (i >= size)
         throw new IndexOutOfBoundsException("Index " + i + " out of bounds.");
       return (T)elements[i];
-    }
-    @Override public boolean add(T o) {
-      if (size == elements.length) {
-        Object[] newElements = new Object[(size * 3)/2 + 1];
-        System.arraycopy(elements, 0, newElements, 0, size);
-        elements = newElements;
-      }
-      elements[size++] = o;
-      return true;
     }
     @Override public void add(int location, T o) {
       if (location > size || location < 0) {
@@ -252,19 +330,6 @@ public class GenericData {
         right--;
       }
     }
-    @Override
-    public String toString() {
-      StringBuilder buffer = new StringBuilder();
-      buffer.append('[');
-      int count = 0;
-      for (T e : this) {
-        buffer.append(e==null ? "null" : e.toString());
-        if (++count < size())
-          buffer.append(", ");
-      }
-      buffer.append(']');
-      return buffer.toString();
-    }
   }
 
   /** Default implementation of {@link GenericFixed}. */
@@ -297,7 +362,7 @@ public class GenericData {
     public boolean equals(Object o) {
       if (o == this) return true;
       return o instanceof GenericFixed
-        && Arrays.equals(bytes, ((GenericFixed)o).bytes());
+              && Arrays.equals(bytes, ((GenericFixed)o).bytes());
     }
 
     @Override
@@ -309,18 +374,18 @@ public class GenericData {
     @Override
     public int compareTo(Fixed that) {
       return BinaryData.compareBytes(this.bytes, 0, this.bytes.length,
-                                     that.bytes, 0, that.bytes.length);
+              that.bytes, 0, that.bytes.length);
     }
   }
 
   /** Default implementation of {@link GenericEnumSymbol}. */
   public static class EnumSymbol
-      implements GenericEnumSymbol<EnumSymbol>  {
-    private EnumSchema schema;
+          implements GenericEnumSymbol, Comparable<GenericEnumSymbol>  {
+    private Schema schema;
     private String symbol;
 
     public EnumSymbol(Schema schema, String symbol) {
-      this.schema = (EnumSchema) schema;
+      this.schema = schema;
       this.symbol = symbol;
     }
 
@@ -338,19 +403,17 @@ public class GenericData {
     public boolean equals(Object o) {
       if (o == this) return true;
       return o instanceof GenericEnumSymbol
-        && symbol.equals(o.toString());
+              && symbol.equals(o.toString());
     }
 
     @Override
     public int hashCode() { return symbol.hashCode(); }
 
     @Override
-    public String toString() {
-      return schema.getStringSymbol(symbol);
-    }
+    public String toString() { return symbol; }
 
     @Override
-    public int compareTo(EnumSymbol that) {
+    public int compareTo(GenericEnumSymbol that) {
       return GenericData.get().compare(this, that, schema);
     }
   }
@@ -373,61 +436,61 @@ public class GenericData {
   /** Returns true if a Java datum matches a schema. */
   public boolean validate(Schema schema, Object datum) {
     switch (schema.getType()) {
-    case RECORD:
-      if (!isRecord(datum)) return false;
-      for (Field f : schema.getFields()) {
-        if (!validate(f.schema(), getField(datum, f.name(), f.pos())))
+      case RECORD:
+        if (!isRecord(datum)) return false;
+        for (Field f : schema.getFields()) {
+          if (!validate(f.schema(), getField(datum, f.name(), f.pos())))
+            return false;
+        }
+        return true;
+      case ENUM:
+        if (!isEnum(datum)) return false;
+        return schema.getEnumSymbols().contains(datum.toString());
+      case ARRAY:
+        if (!(isArray(datum))) return false;
+        for (Object element : getArrayAsCollection(datum))
+          if (!validate(schema.getElementType(), element))
+            return false;
+        return true;
+      case MAP:
+        if (!(isMap(datum))) return false;
+        @SuppressWarnings(value="unchecked")
+        Map<Object,Object> map = (Map<Object,Object>)datum;
+        for (Map.Entry<Object,Object> entry : map.entrySet())
+          if (!validate(schema.getValueType(), entry.getValue()))
+            return false;
+        return true;
+      case UNION:
+        try {
+          int i = resolveUnion(schema, datum);
+          return validate(schema.getTypes().get(i), datum);
+        } catch (UnresolvedUnionException e) {
           return false;
-      }
-      return true;
-    case ENUM:
-      if (!isEnum(datum)) return false;
-      return ((EnumSchema) schema).getEnumSymbolOrAliasOrdinal(datum.toString()) >= 0;
-    case ARRAY:
-      if (!(isArray(datum))) return false;
-      for (Object element : getArrayAsCollection(datum))
-        if (!validate(schema.getElementType(), element))
-          return false;
-      return true;
-    case MAP:
-      if (!(isMap(datum))) return false;
-      @SuppressWarnings(value="unchecked")
-      Map<Object,Object> map = (Map<Object,Object>)datum;
-      for (Map.Entry<Object,Object> entry : map.entrySet())
-        if (!validate(schema.getValueType(), entry.getValue()))
-          return false;
-      return true;
-    case UNION:
-      try {
-        int i = resolveUnion(schema, datum);
-        return validate(schema.getTypes().get(i), datum);
-      } catch (UnresolvedUnionException e) {
-        return false;
-      }
-    case FIXED:
-      return datum instanceof GenericFixed
-        && ((GenericFixed)datum).bytes().length==schema.getFixedSize();
-    case STRING:  return isString(datum);
-    case BYTES:   return isBytes(datum);
-    case INT:     return isInteger(datum);
-    case LONG:    return isLong(datum);
-    case FLOAT:   return isFloat(datum);
-    case DOUBLE:  return isDouble(datum);
-    case BOOLEAN: return isBoolean(datum);
-    case NULL:    return datum == null;
-    default: return false;
+        }
+      case FIXED:
+        return datum instanceof GenericFixed
+                && ((GenericFixed)datum).bytes().length==schema.getFixedSize();
+      case STRING:  return isString(datum);
+      case BYTES:   return isBytes(datum);
+      case INT:     return isInteger(datum);
+      case LONG:    return isLong(datum);
+      case FLOAT:   return isFloat(datum);
+      case DOUBLE:  return isDouble(datum);
+      case BOOLEAN: return isBoolean(datum);
+      case NULL:    return datum == null;
+      default: return false;
     }
   }
 
-/** Renders a Java datum as <a href="http://www.json.org/">JSON</a>. */
+  /** Renders a Java datum as <a href="http://www.json.org/">JSON</a>. */
   public String toString(Object datum) {
     StringBuilder buffer = new StringBuilder();
-    toString(datum, buffer, new IdentityHashMap<Object, Object>(128) );
+    toString(datum, buffer, new IdentityHashMap<>(128) );
     return buffer.toString();
   }
 
   private static final String TOSTRING_CIRCULAR_REFERENCE_ERROR_TEXT =
-    " \">>> CIRCULAR REFERENCE CANNOT BE PUT IN JSON STRING, ABORTING RECURSION <<<\" ";
+          " \">>> CIRCULAR REFERENCE CANNOT BE PUT IN JSON STRING, ABORTING RECURSION <<<\" ";
 
   /** Renders a Java datum as <a href="http://www.json.org/">JSON</a>. */
   protected void toString(Object datum, StringBuilder buffer, IdentityHashMap<Object, Object> seenObjects) {
@@ -437,7 +500,7 @@ public class GenericData {
         return;
       }
       seenObjects.put(datum, datum);
-      buffer.append('{');
+      buffer.append("{");
       int count = 0;
       Schema schema = getRecordSchema(datum);
       for (Field f : schema.getFields()) {
@@ -447,7 +510,7 @@ public class GenericData {
         if (++count < schema.getFields().size())
           buffer.append(", ");
       }
-      buffer.append('}');
+      buffer.append("}");
       seenObjects.remove(datum);
     } else if (isArray(datum)) {
       if (seenObjects.containsKey(datum)) {
@@ -456,7 +519,7 @@ public class GenericData {
       }
       seenObjects.put(datum, datum);
       Collection<?> array = getArrayAsCollection(datum);
-      buffer.append('[');
+      buffer.append("[");
       long last = array.size()-1;
       int i = 0;
       for (Object element : array) {
@@ -464,7 +527,7 @@ public class GenericData {
         if (i++ < last)
           buffer.append(", ");
       }
-      buffer.append(']');
+      buffer.append("]");
       seenObjects.remove(datum);
     } else if (isMap(datum)) {
       if (seenObjects.containsKey(datum)) {
@@ -472,7 +535,7 @@ public class GenericData {
         return;
       }
       seenObjects.put(datum, datum);
-      buffer.append('{');
+      buffer.append("{");
       int count = 0;
       @SuppressWarnings(value="unchecked")
       Map<Object,Object> map = (Map<Object,Object>)datum;
@@ -486,21 +549,21 @@ public class GenericData {
       buffer.append("}");
       seenObjects.remove(datum);
     } else if (isString(datum)|| isEnum(datum)) {
-      buffer.append('\"');
+      buffer.append("\"");
       writeEscapedString(datum.toString(), buffer);
-      buffer.append('\"');
+      buffer.append("\"");
     } else if (isBytes(datum)) {
       buffer.append("{\"bytes\": \"");
       ByteBuffer bytes = ((ByteBuffer) datum).duplicate();
       writeEscapedString(StandardCharsets.ISO_8859_1.decode(bytes), buffer);
       buffer.append("\"}");
     } else if (((datum instanceof Float) &&       // quote Nan & Infinity
-                (((Float)datum).isInfinite() || ((Float)datum).isNaN()))
-               || ((datum instanceof Double) &&
-                   (((Double)datum).isInfinite() || ((Double)datum).isNaN()))) {
-      buffer.append('\"');
+            (((Float)datum).isInfinite() || ((Float)datum).isNaN()))
+            || ((datum instanceof Double) &&
+            (((Double)datum).isInfinite() || ((Double)datum).isNaN()))) {
+      buffer.append("\"");
       buffer.append(datum);
-      buffer.append('\"');
+      buffer.append("\"");
     } else if (datum instanceof GenericData) {
       if (seenObjects.containsKey(datum)) {
         buffer.append(TOSTRING_CIRCULAR_REFERENCE_ERROR_TEXT);
@@ -514,9 +577,8 @@ public class GenericData {
     }
   }
 
-
   /* Adapted from http://code.google.com/p/json-simple */
-  private static void writeEscapedString(CharSequence string, StringBuilder builder) {
+  private void writeEscapedString(CharSequence string, StringBuilder builder) {
     for(int i = 0; i < string.length(); i++){
       char ch = string.charAt(i);
       switch(ch){
@@ -552,7 +614,7 @@ public class GenericData {
           } else {
             builder.append(ch);
           }
-        }
+      }
     }
   }
 
@@ -591,7 +653,7 @@ public class GenericData {
       return Schema.createMap(value);
     } else if (datum instanceof GenericFixed) {
       return Schema.createFixed(null, null, null,
-                                ((GenericFixed)datum).bytes().length);
+              ((GenericFixed)datum).bytes().length);
     }
     else if (isString(datum)) return Schema.create(Type.STRING);
     else if (isBytes(datum)) return Schema.create(Type.BYTES);
@@ -637,34 +699,35 @@ public class GenericData {
   /** Return the index for a datum within a union.  Implemented with {@link
    * Schema#getIndexNamed(String)} and {@link #getSchemaName(Object)}.*/
   public int resolveUnion(Schema union, Object datum) {
-    // TODO: see if this needs to be optimized
-    List<Schema> types = union.getTypes();
-    int i = 0;
-    for (Schema schema : types) {
-      if (datum == null && schema.getType() == Type.NULL) {
-        return i;
-      }
-      LogicalType ltype = schema.getLogicalType();
-      if (ltype != null) {
-        if (ltype.getLogicalJavaType().isAssignableFrom(datum.getClass())) {
-          return i;
+    // if there is a logical type that works, use it first
+    // this allows logical type concrete classes to overlap with supported ones
+    // for example, a conversion could return a map
+    if (datum != null) {
+      Map<String, Conversion<?>> conversions = conversionsByClass.get(datum.getClass());
+      if (conversions != null) {
+        List<Schema> candidates = union.getTypes();
+        for (int i = 0; i < candidates.size(); i += 1) {
+          LogicalType candidateType = candidates.get(i).getLogicalType();
+          if (candidateType != null) {
+            Conversion<?> conversion = conversions.get(candidateType.getName());
+            if (conversion != null) {
+              return i;
+            }
+          }
         }
       }
-      i++;
     }
-    Integer ii = union.getIndexNamed(getSchemaName(datum));
-    if (ii != null)
-      return ii;
 
+    Integer i = union.getIndexNamed(getSchemaName(datum));
+    if (i != null)
+      return i;
     throw new UnresolvedUnionException(union, datum);
   }
 
   /** Return the schema full name for a datum.  Called by {@link
    * #resolveUnion(Schema,Object)}. */
   protected String getSchemaName(Object datum) {
-    if (datum == null)
-      return Type.NULL.getName();
-    if (JsonProperties.NULL_VALUE.equals(datum))
+    if (datum == null || datum == JsonProperties.NULL_VALUE)
       return Type.NULL.getName();
     if (isRecord(datum))
       return getRecordSchema(datum).getFullName();
@@ -691,36 +754,36 @@ public class GenericData {
     if (isBoolean(datum))
       return Type.BOOLEAN.getName();
     throw new AvroRuntimeException
-      (String.format("Unknown datum type %s: %s",
-                     datum.getClass().getName(), datum));
- }
+            (String.format("Unknown datum type %s: %s",
+                    datum.getClass().getName(), datum));
+  }
 
   /** Called by {@link #resolveUnion(Schema,Object)}.  May be overridden for
-      alternate data representations.*/
+   alternate data representations.*/
   protected boolean instanceOf(Schema schema, Object datum) {
     switch (schema.getType()) {
-    case RECORD:
-      if (!isRecord(datum)) return false;
-      return (schema.getFullName() == null)
-        ? getRecordSchema(datum).getFullName() == null
-        : schema.getFullName().equals(getRecordSchema(datum).getFullName());
-    case ENUM:
-      if (!isEnum(datum)) return false;
-      return schema.getFullName().equals(getEnumSchema(datum).getFullName());
-    case ARRAY:   return isArray(datum);
-    case MAP:     return isMap(datum);
-    case FIXED:
-      if (!isFixed(datum)) return false;
-      return schema.getFullName().equals(getFixedSchema(datum).getFullName());
-    case STRING:  return isString(datum);
-    case BYTES:   return isBytes(datum);
-    case INT:     return isInteger(datum);
-    case LONG:    return isLong(datum);
-    case FLOAT:   return isFloat(datum);
-    case DOUBLE:  return isDouble(datum);
-    case BOOLEAN: return isBoolean(datum);
-    case NULL:    return datum == null;
-    default: throw new AvroRuntimeException("Unexpected type: " +schema);
+      case RECORD:
+        if (!isRecord(datum)) return false;
+        return (schema.getFullName() == null)
+                ? getRecordSchema(datum).getFullName() == null
+                : schema.getFullName().equals(getRecordSchema(datum).getFullName());
+      case ENUM:
+        if (!isEnum(datum)) return false;
+        return schema.getFullName().equals(getEnumSchema(datum).getFullName());
+      case ARRAY:   return isArray(datum);
+      case MAP:     return isMap(datum);
+      case FIXED:
+        if (!isFixed(datum)) return false;
+        return schema.getFullName().equals(getFixedSchema(datum).getFullName());
+      case STRING:  return isString(datum);
+      case BYTES:   return isBytes(datum);
+      case INT:     return isInteger(datum);
+      case LONG:    return isLong(datum);
+      case FLOAT:   return isFloat(datum);
+      case DOUBLE:  return isDouble(datum);
+      case BOOLEAN: return isBoolean(datum);
+      case NULL:    return datum == null;
+      default: throw new AvroRuntimeException("Unexpected type: " +schema);
     }
   }
 
@@ -748,7 +811,7 @@ public class GenericData {
 
   /** Called by the default implementation of {@link #instanceOf}.*/
   protected boolean isEnum(Object datum) {
-    return datum instanceof GenericEnumSymbol || datum instanceof Enum;
+    return datum instanceof GenericEnumSymbol;
   }
 
   /** Called to obtain the schema of a enum.  By default calls
@@ -785,7 +848,7 @@ public class GenericData {
     return datum instanceof ByteBuffer;
   }
 
-   /**
+  /**
    * Called by the default implementation of {@link #instanceOf}.
    */
   protected boolean isInteger(Object datum) {
@@ -827,30 +890,30 @@ public class GenericData {
     if (o == null) return 0;                      // incomplete datum
     int hashCode = 1;
     switch (s.getType()) {
-    case RECORD:
-      for (Field f : s.getFields()) {
-        if (f.order() == Field.Order.IGNORE)
-          continue;
-        hashCode = hashCodeAdd(hashCode,
-                               getField(o, f.name(), f.pos()), f.schema());
-      }
-      return hashCode;
-    case ARRAY:
-      Collection<?> a = (Collection<?>)o;
-      Schema elementType = s.getElementType();
-      for (Object e : a)
-        hashCode = hashCodeAdd(hashCode, e, elementType);
-      return hashCode;
-    case UNION:
-      return hashCode(o, s.getTypes().get(resolveUnion(s, o)));
-    case ENUM:
-      return s.getEnumOrdinal(o.toString());
-    case NULL:
-      return 0;
-    case STRING:
-      return (o instanceof Utf8 ? o : new Utf8(o.toString())).hashCode();
-    default:
-      return o.hashCode();
+      case RECORD:
+        for (Field f : s.getFields()) {
+          if (f.order() == Field.Order.IGNORE)
+            continue;
+          hashCode = hashCodeAdd(hashCode,
+                  getField(o, f.name(), f.pos()), f.schema());
+        }
+        return hashCode;
+      case ARRAY:
+        Collection<?> a = (Collection<?>)o;
+        Schema elementType = s.getElementType();
+        for (Object e : a)
+          hashCode = hashCodeAdd(hashCode, e, elementType);
+        return hashCode;
+      case UNION:
+        return hashCode(o, s.getTypes().get(resolveUnion(s, o)));
+      case ENUM:
+        return s.getEnumOrdinal(o.toString());
+      case NULL:
+        return 0;
+      case STRING:
+        return (o instanceof Utf8 ? o : new Utf8(o.toString())).hashCode();
+      default:
+        return o.hashCode();
     }
   }
 
@@ -873,78 +936,137 @@ public class GenericData {
   protected int compare(Object o1, Object o2, Schema s, boolean equals) {
     if (o1 == o2) return 0;
     switch (s.getType()) {
-    case RECORD:
-      if (s.getLogicalType() != null) {
-        return (Objects.equals(o1, o2)) ? 0 : 1;
-      }
-      for (Field f : s.getFields()) {
-        if (f.order() == Field.Order.IGNORE)
-          continue;                               // ignore this field
-        int pos = f.pos();
-        String name = f.name();
-        int compare =
-          compare(getField(o1, name, pos), getField(o2, name, pos),
-                  f.schema(), equals);
-        if (compare != 0)                         // not equal
-          return f.order() == Field.Order.DESCENDING ? -compare : compare;
-      }
-      return 0;
-    case ENUM:
-      return s.getEnumOrdinal(o1.toString()) - s.getEnumOrdinal(o2.toString());
-    case ARRAY:
-      Collection a1 = (Collection)o1;
-      Collection a2 = (Collection)o2;
-      Iterator e1 = a1.iterator();
-      Iterator e2 = a2.iterator();
-      Schema elementType = s.getElementType();
-      while(e1.hasNext() && e2.hasNext()) {
-        int compare = compare(e1.next(), e2.next(), elementType, equals);
-        if (compare != 0) return compare;
-      }
-      return e1.hasNext() ? 1 : (e2.hasNext() ? -1 : 0);
-    case MAP:
-      if (equals)
-        return ((Map)o1).equals(o2) ? 0 : 1;
-      throw new AvroRuntimeException("Can't compare maps!");
-    case UNION:
-      int i1 = resolveUnion(s, o1);
-      int i2 = resolveUnion(s, o2);
-      return (i1 == i2)
-        ? compare(o1, o2, s.getTypes().get(i1), equals)
-        : i1 - i2;
-    case NULL:
-      return 0;
-    case STRING:
-      Utf8 u1 = o1 instanceof Utf8 ? (Utf8)o1 : new Utf8(o1.toString());
-      Utf8 u2 = o2 instanceof Utf8 ? (Utf8)o2 : new Utf8(o2.toString());
-      return u1.compareTo(u2);
-    default:
-      return ((Comparable)o1).compareTo(o2);
+      case RECORD:
+        for (Field f : s.getFields()) {
+          if (f.order() == Field.Order.IGNORE)
+            continue;                               // ignore this field
+          int pos = f.pos();
+          String name = f.name();
+          int compare =
+                  compare(getField(o1, name, pos), getField(o2, name, pos),
+                          f.schema(), equals);
+          if (compare != 0)                         // not equal
+            return f.order() == Field.Order.DESCENDING ? -compare : compare;
+        }
+        return 0;
+      case ENUM:
+        return s.getEnumOrdinal(o1.toString()) - s.getEnumOrdinal(o2.toString());
+      case ARRAY:
+        Collection a1 = (Collection)o1;
+        Collection a2 = (Collection)o2;
+        Iterator e1 = a1.iterator();
+        Iterator e2 = a2.iterator();
+        Schema elementType = s.getElementType();
+        while(e1.hasNext() && e2.hasNext()) {
+          int compare = compare(e1.next(), e2.next(), elementType, equals);
+          if (compare != 0) return compare;
+        }
+        return e1.hasNext() ? 1 : (e2.hasNext() ? -1 : 0);
+      case MAP:
+        if (equals)
+          return ((Map)o1).equals(o2) ? 0 : 1;
+        throw new AvroRuntimeException("Can't compare maps!");
+      case UNION:
+        int i1 = resolveUnion(s, o1);
+        int i2 = resolveUnion(s, o2);
+        return (i1 == i2)
+                ? compare(o1, o2, s.getTypes().get(i1), equals)
+                : i1 - i2;
+      case NULL:
+        return 0;
+      case STRING:
+        Utf8 u1 = o1 instanceof Utf8 ? (Utf8)o1 : new Utf8(o1.toString());
+        Utf8 u2 = o2 instanceof Utf8 ? (Utf8)o2 : new Utf8(o2.toString());
+        return u1.compareTo(u2);
+      default:
+        return ((Comparable)o1).compareTo(o2);
     }
+  }
+
+  private final Map<Field, Object> defaultValueCache
+          = new MapMaker().weakKeys().makeMap();
+
+  /**
+   * Gets the default value of the given field, if any.
+   * @param field the field whose default value should be retrieved.
+   * @return the default value associated with the given field,
+   * or null if none is specified in the schema.
+   */
+  @SuppressWarnings({ "rawtypes", "unchecked" })
+  public Object getDefaultValue(Field field) {
+    JsonNode json = field.defaultValue();
+    if (json == null)
+      throw new AvroMissingFieldException("Field " + field
+              + " not set and has no default value", field);
+    if (json.isNull()
+            && (field.schema().getType() == Type.NULL
+            || (field.schema().getType() == Type.UNION
+            && field.schema().getTypes().get(0).getType() == Type.NULL))) {
+      return null;
+    }
+
+    // Check the cache
+    Object defaultValue = defaultValueCache.get(field);
+
+    // If not cached, get the default Java value by encoding the default JSON
+    // value and then decoding it:
+    if (defaultValue == null)
+      try {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        BinaryEncoder encoder = EncoderFactory.get().binaryEncoder(baos, null);
+        ResolvingGrammarGenerator.encode(encoder, field.schema(), json);
+        encoder.flush();
+        BinaryDecoder decoder =
+                DecoderFactory.get().binaryDecoder(baos.toByteArray(), null);
+        defaultValue =
+                createDatumReader(field.schema()).read(null, decoder);
+
+        defaultValueCache.put(field, defaultValue);
+      } catch (IOException e) {
+        throw new AvroRuntimeException(e);
+      }
+
+    return defaultValue;
   }
 
   private static final Schema STRINGS = Schema.create(Type.STRING);
 
   /**
    * Makes a deep copy of a value given its schema.
+   * <P>Logical types are converted to raw types, copied, then converted back.
    * @param schema the schema of the value to deep copy.
    * @param value the value to deep copy.
    * @return a deep copy of the given value.
    */
   @SuppressWarnings({ "rawtypes", "unchecked" })
   public <T> T deepCopy(Schema schema, T value) {
+    if (value == null) return null;
+    LogicalType logicalType = schema.getLogicalType();
+    if (logicalType == null)           // not a logical type -- use raw copy
+      return (T)deepCopyRaw(schema, value);
+    Conversion conversion = getConversionByClass(value.getClass(), logicalType);
+    if (conversion == null)            // no conversion defined -- try raw copy
+      return (T)deepCopyRaw(schema, value);
+    // logical type with conversion: convert to raw, copy, then convert back to logical
+    Object raw = Conversions.convertToRawType(value, schema, logicalType, conversion);
+    Object copy = deepCopyRaw(schema, raw);       // copy raw
+    return (T)Conversions.convertToLogicalType(copy, schema, logicalType, conversion);
+  }
+
+  private Object deepCopyRaw(Schema schema, Object value) {
     if (value == null) {
       return null;
     }
+
     switch (schema.getType()) {
       case ARRAY:
         List<Object> arrayValue = (List) value;
-        List<Object> arrayCopy = new GenericData.Array<Object>(
-            arrayValue.size(), schema);
+        List<Object> arrayCopy = new GenericData.Array<>(
+                arrayValue.size(), schema);
         for (Object obj : arrayValue) {
           arrayCopy.add(deepCopy(schema.getElementType(), obj));
         }
-        return (T)arrayCopy;
+        return arrayCopy;
       case BOOLEAN:
         return value; // immutable
       case BYTES:
@@ -954,13 +1076,13 @@ public class GenericData {
         byte[] bytesCopy = new byte[length];
         byteBufferValue.get(bytesCopy, 0, length);
         byteBufferValue.position(start);
-        return (T)ByteBuffer.wrap(bytesCopy, 0, length);
+        return ByteBuffer.wrap(bytesCopy, 0, length);
       case DOUBLE:
         return value; // immutable
       case ENUM:
-        return (T)createEnum(value.toString(), schema);
+        return createEnum(value.toString(), schema);
       case FIXED:
-        return (T)createFixed(null, ((GenericFixed) value).bytes(), schema);
+        return createFixed(null, ((GenericFixed) value).bytes(), schema);
       case FLOAT:
         return value; // immutable
       case INT:
@@ -970,14 +1092,14 @@ public class GenericData {
       case MAP:
         Map<CharSequence, Object> mapValue = (Map) value;
         Map<CharSequence, Object> mapCopy =
-          new HashMap<CharSequence, Object>(mapValue.size());
+                new HashMap<>(mapValue.size());
         for (Map.Entry<CharSequence, Object> entry : mapValue.entrySet()) {
           mapCopy.put((CharSequence)(deepCopy(STRINGS, entry.getKey())),
-              deepCopy(schema.getValueType(), entry.getValue()));
+                  deepCopy(schema.getValueType(), entry.getValue()));
         }
-        return (T)mapCopy;
+        return mapCopy;
       case NULL:
-        return (T) JsonProperties.NULL_VALUE;
+        return null;
       case RECORD:
         Object oldState = getRecordState(value, schema);
         Object newRecord = newRecord(null, schema);
@@ -986,14 +1108,14 @@ public class GenericData {
           int pos = f.pos();
           String name = f.name();
           Object newValue = deepCopy(f.schema(),
-                                     getField(value, name, pos, oldState));
+                  getField(value, name, pos, oldState));
           setField(newRecord, name, pos, newValue, newState);
         }
-        return (T)newRecord;
+        return newRecord;
       case STRING:
         // Strings are immutable
         if (value instanceof String) {
-          return (T)value;
+          return value;
         }
 
         // Some CharSequence subclasses are mutable, so we still need to make
@@ -1001,19 +1123,16 @@ public class GenericData {
         else if (value instanceof Utf8) {
           // Utf8 copy constructor is more efficient than converting
           // to string and then back to Utf8
-          return (T)new Utf8((Utf8)value);
-        } else if (value instanceof CharSequence) {
-          return (T) value.toString();
-        } else {
-          return (T) value;
+          return new Utf8((Utf8)value);
         }
+        return new Utf8(value.toString());
       case UNION:
         return deepCopy(
-            schema.getTypes().get(resolveUnion(schema, value)), value);
+                schema.getTypes().get(resolveUnion(schema, value)), value);
       default:
         throw new AvroRuntimeException(
-            "Deep copy failed for schema \"" + schema + "\" and value \"" +
-            value + "\"");
+                "Deep copy failed for schema \"" + schema + "\" and value \"" +
+                        value + "\"");
     }
   }
 
@@ -1021,7 +1140,7 @@ public class GenericData {
    * representations.  By default, returns {@link GenericFixed}. */
   public Object createFixed(Object old, Schema schema) {
     if ((old instanceof GenericFixed)
-        && ((GenericFixed)old).bytes().length == schema.getFixedSize())
+            && ((GenericFixed)old).bytes().length == schema.getFixedSize())
       return old;
     return new GenericData.Fixed(schema);
   }
